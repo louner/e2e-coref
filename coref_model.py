@@ -18,6 +18,8 @@ import coref_ops
 import conll
 import metrics
 
+from pdb import set_trace
+
 class CorefModel(object):
   def __init__(self, config):
     self.config = config
@@ -120,7 +122,8 @@ class CorefModel(object):
     return np.array(starts), np.array(ends), np.array([label_dict[c] for c in labels])
 
   def tensorize_example(self, example, is_training):
-    clusters = example["clusters"]
+    #set_trace()
+    clusters = [example["clusters"]]
 
     gold_mentions = sorted(tuple(m) for m in util.flatten(clusters))
     gold_mention_map = {m:i for i,m in enumerate(gold_mentions)}
