@@ -17,10 +17,12 @@ import pyhocon
 
 
 def initialize_from_env():
+  '''
   if "GPU" in os.environ:
     set_gpus(int(os.environ["GPU"]))
   else:
     set_gpus()
+  '''
 
   name = sys.argv[1]
   print("Running experiment: {}".format(name))
