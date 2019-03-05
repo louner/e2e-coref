@@ -18,7 +18,10 @@ import coref_ops
 import conll
 import metrics
 
+import pandas as pd
 from pdb import set_trace
+
+from sklearn.metrics import accuracy_score
 
 class CorefModel(object):
   def __init__(self, config):
@@ -90,7 +93,8 @@ class CorefModel(object):
     # Don't try to restore unused variables from the TF-Hub ELMo module.
     vars_to_restore = [v for v in tf.global_variables() if "module/" not in v.name]
     saver = tf.train.Saver(vars_to_restore)
-    checkpoint_path = os.path.join(self.config["log_dir"], "model.max.ckpt")
+    #checkpoint_path = os.path.join(self.config["log_dir"], "model.max.ckpt")
+    checkpoint_path = os.path.join(self.config["log_dir"], "model-5000")
     print("Restoring from {}".format(checkpoint_path))
     session.run(tf.global_variables_initializer())
     saver.restore(session, checkpoint_path)
@@ -122,8 +126,7 @@ class CorefModel(object):
     return np.array(starts), np.array(ends), np.array([label_dict[c] for c in labels])
 
   def tensorize_example(self, example, is_training):
-    #set_trace()
-    clusters = [example["clusters"]]
+    clusters = example["clusters"]
 
     gold_mentions = sorted(tuple(m) for m in util.flatten(clusters))
     gold_mention_map = {m:i for i,m in enumerate(gold_mentions)}
@@ -338,7 +341,7 @@ class CorefModel(object):
           f = tf.sigmoid(util.projection(tf.concat([top_span_emb, attended_span_emb], 1), util.shape(top_span_emb, -1))) # [k, emb]
           top_span_emb = f * attended_span_emb + (1 - f) * top_span_emb # [k, emb]
 
-    top_antecedent_scores = tf.concat([dummy_scores, top_antecedent_scores], 1) # [k, c + 1]
+    top_antecedent_scores = tf.concat([dummy_scores, top_antecedent_scores], 1, name='top_antecedent_scores') # [k, c + 1]
 
     top_antecedent_cluster_ids = tf.gather(top_span_cluster_ids, top_antecedents) # [k, c]
     top_antecedent_cluster_ids += tf.to_int32(tf.log(tf.to_float(top_antecedents_mask))) # [k, c]
@@ -346,7 +349,7 @@ class CorefModel(object):
     non_dummy_indicator = tf.expand_dims(top_span_cluster_ids > 0, 1) # [k, 1]
     pairwise_labels = tf.logical_and(same_cluster_indicator, non_dummy_indicator) # [k, c]
     dummy_labels = tf.logical_not(tf.reduce_any(pairwise_labels, 1, keepdims=True)) # [k, 1]
-    top_antecedent_labels = tf.concat([dummy_labels, pairwise_labels], 1) # [k, c + 1]
+    top_antecedent_labels = tf.concat([dummy_labels, pairwise_labels], 1, name='top_antecedent_labels') # [k, c + 1]
     loss = self.softmax_loss(top_antecedent_scores, top_antecedent_labels) # [k]
     loss = tf.reduce_sum(loss) # []
 
@@ -417,8 +420,8 @@ class CorefModel(object):
       speaker_pair_emb = tf.gather(tf.get_variable("same_speaker_emb", [2, self.config["feature_size"]]), tf.to_int32(same_speaker)) # [k, c, emb]
       feature_emb_list.append(speaker_pair_emb)
 
-      tiled_genre_emb = tf.tile(tf.expand_dims(tf.expand_dims(genre_emb, 0), 0), [k, c, 1]) # [k, c, emb]
-      feature_emb_list.append(tiled_genre_emb)
+      #tiled_genre_emb = tf.tile(tf.expand_dims(tf.expand_dims(genre_emb, 0), 0), [k, c, 1]) # [k, c, emb]
+      #feature_emb_list.append(tiled_genre_emb)
 
     if self.config["use_features"]:
       antecedent_distance_buckets = self.bucket_distance(top_antecedent_offsets) # [k, c]
@@ -548,6 +551,7 @@ class CorefModel(object):
 
     coref_predictions = {}
     coref_evaluator = metrics.CorefEvaluator()
+    predictions = []
 
     for example_num, (tensorized_example, example) in enumerate(self.eval_data):
       _, _, _, _, _, _, _, _, _, gold_starts, gold_ends, _ = tensorized_example
@@ -555,9 +559,20 @@ class CorefModel(object):
       candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedents, top_antecedent_scores = session.run(self.predictions, feed_dict=feed_dict)
       predicted_antecedents = self.get_predicted_antecedents(top_antecedents, top_antecedent_scores)
       coref_predictions[example["doc_key"]] = self.evaluate_coref(top_span_starts, top_span_ends, predicted_antecedents, example["clusters"], coref_evaluator)
-      if example_num % 10 == 0:
+      example['predict_cluster'] = coref_predictions[example["doc_key"]]
+      predictions.append(example)
+      if example_num % 10 == 9:
         print("Evaluated {}/{} examples.".format(example_num + 1, len(self.eval_data)))
 
+    df = pd.DataFrame(predictions)
+    df['predict'] = df[['predict_cluster', 'Pronoun_mention', 'A_mention', 'B_mention']].apply(predict, axis=1)
+    accuracy = accuracy_score(df['predict'], df['label'])
+    summary_dict = {}
+    summary_dict['accuracy'] = accuracy
+    print(accuracy)
+    return summary_dict, accuracy
+
+    '''
     summary_dict = {}
     conll_results = conll.evaluate_conll(self.config["conll_eval_path"], coref_predictions, official_stdout)
     average_f1 = sum(results["f"] for results in conll_results.values()) / len(conll_results)
@@ -573,3 +588,20 @@ class CorefModel(object):
     print("Average recall (py): {:.2f}%".format(r * 100))
 
     return util.make_summary(summary_dict), average_f1
+    '''
+
+def to_tuple(l):
+    return set([set(ll) for ll in l])
+
+def predict(x):
+    clusters, pm, am, bm = x
+    pm, am, bm = tuple(pm), tuple(am), tuple(bm)
+    for cluster in clusters:
+        if pm in cluster:
+            if am in cluster:
+                return 0
+            elif bm in cluster:
+                return 1
+            else:
+                return 2
+    return -1
