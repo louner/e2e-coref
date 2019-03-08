@@ -126,7 +126,9 @@ class CorefModel(object):
     return np.array(starts), np.array(ends), np.array([label_dict[c] for c in labels])
 
   def tensorize_example(self, example, is_training):
+    #print(example)
     clusters = example["clusters"]
+
 
     gold_mentions = sorted(tuple(m) for m in util.flatten(clusters))
     gold_mention_map = {m:i for i,m in enumerate(gold_mentions)}
@@ -234,6 +236,7 @@ class CorefModel(object):
     return top_antecedents, top_antecedents_mask, top_fast_antecedent_scores, top_antecedent_offsets
 
   def get_predictions_and_loss(self, tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids):
+    self.tokens = tokens
     self.dropout = self.get_dropout(self.config["dropout_rate"], is_training)
     self.lexical_dropout = self.get_dropout(self.config["lexical_dropout_rate"], is_training)
     self.lstm_dropout = self.get_dropout(self.config["lstm_dropout_rate"], is_training)
@@ -288,22 +291,38 @@ class CorefModel(object):
     flattened_sentence_indices = self.flatten_emb_by_sentence(sentence_indices, text_len_mask) # [num_words]
     flattened_head_emb = self.flatten_emb_by_sentence(head_emb, text_len_mask) # [num_words]
 
-    candidate_starts = tf.tile(tf.expand_dims(tf.range(num_words), 1), [1, self.max_span_width]) # [num_words, max_span_width]
-    candidate_ends = candidate_starts + tf.expand_dims(tf.range(self.max_span_width), 0) # [num_words, max_span_width]
-    candidate_start_sentence_indices = tf.gather(flattened_sentence_indices, candidate_starts) # [num_words, max_span_width]
-    candidate_end_sentence_indices = tf.gather(flattened_sentence_indices, tf.minimum(candidate_ends, num_words - 1)) # [num_words, max_span_width]
-    candidate_mask = tf.logical_and(candidate_ends < num_words, tf.equal(candidate_start_sentence_indices, candidate_end_sentence_indices)) # [num_words, max_span_width]
-    flattened_candidate_mask = tf.reshape(candidate_mask, [-1]) # [num_words * max_span_width]
-    candidate_starts = tf.boolean_mask(tf.reshape(candidate_starts, [-1]), flattened_candidate_mask) # [num_candidates]
-    candidate_ends = tf.boolean_mask(tf.reshape(candidate_ends, [-1]), flattened_candidate_mask) # [num_candidates]
-    candidate_sentence_indices = tf.boolean_mask(tf.reshape(candidate_start_sentence_indices, [-1]), flattened_candidate_mask) # [num_candidates]
+    #candidate_starts = tf.tile(tf.expand_dims(tf.range(num_words), 1), [1, self.max_span_width]) # [num_words, max_span_width]
+    #candidate_ends = candidate_starts + tf.expand_dims(tf.range(self.max_span_width), 0) # [num_words, max_span_width]
+    candidate_starts = gold_starts
+    candidate_ends = gold_ends
+
+    #candidate_start_sentence_indices = tf.gather(flattened_sentence_indices, candidate_starts) # [num_words, max_span_width]
+    #candidate_end_sentence_indices = tf.gather(flattened_sentence_indices, tf.minimum(candidate_ends, num_words - 1)) # [num_words, max_span_width]
+    #candidate_mask = tf.logical_and(candidate_ends < num_words, tf.equal(candidate_start_sentence_indices, candidate_end_sentence_indices)) # [num_words, max_span_width]
+    #flattened_candidate_mask = tf.reshape(candidate_mask, [-1]) # [num_words * max_span_width]
+    #candidate_starts = tf.boolean_mask(tf.reshape(candidate_starts, [-1]), flattened_candidate_mask) # [num_candidates]
+    #candidate_ends = tf.boolean_mask(tf.reshape(candidate_ends, [-1]), flattened_candidate_mask) # [num_candidates]
+    #candidate_sentence_indices = tf.boolean_mask(tf.reshape(candidate_start_sentence_indices, [-1]), flattened_candidate_mask) # [num_candidates]
 
     candidate_cluster_ids = self.get_candidate_labels(candidate_starts, candidate_ends, gold_starts, gold_ends, cluster_ids) # [num_candidates]
 
     candidate_span_emb = self.get_span_emb(flattened_head_emb, context_outputs, candidate_starts, candidate_ends) # [num_candidates, emb]
-    candidate_mention_scores =  self.get_mention_scores(candidate_span_emb) # [k, 1]
-    candidate_mention_scores = tf.squeeze(candidate_mention_scores, 1) # [k]
 
+    self.candidate_starts = candidate_starts
+    self.candidate_ends = candidate_ends
+    self.candidate_span_emb = candidate_span_emb
+
+    #k = tf.to_int32(tf.floor(tf.to_float(tf.shape(context_outputs)[0]) * self.config["top_span_ratio"]))
+    #c = tf.minimum(self.config["max_top_antecedents"], k)
+    k = tf.constant(3)
+    c = tf.constant(2)
+    self.k = k
+    self.c = c
+
+    #candidate_mention_scores =  self.get_mention_scores(candidate_span_emb) # [k, 1]
+    #candidate_mention_scores = tf.squeeze(candidate_mention_scores, 1) # [k]
+
+    '''
     k = tf.to_int32(tf.floor(tf.to_float(tf.shape(context_outputs)[0]) * self.config["top_span_ratio"]))
     top_span_indices = coref_ops.extract_spans(tf.expand_dims(candidate_mention_scores, 0),
                                                tf.expand_dims(candidate_starts, 0),
@@ -311,15 +330,18 @@ class CorefModel(object):
                                                tf.expand_dims(k, 0),
                                                util.shape(context_outputs, 0),
                                                True) # [1, k]
+
     top_span_indices.set_shape([1, None])
     top_span_indices = tf.squeeze(top_span_indices, 0) # [k]
+
+    self.top_span_indices = top_span_indices
 
     top_span_starts = tf.gather(candidate_starts, top_span_indices) # [k]
     top_span_ends = tf.gather(candidate_ends, top_span_indices) # [k]
     top_span_emb = tf.gather(candidate_span_emb, top_span_indices) # [k, emb]
     top_span_cluster_ids = tf.gather(candidate_cluster_ids, top_span_indices) # [k]
     top_span_mention_scores = tf.gather(candidate_mention_scores, top_span_indices) # [k]
-    top_span_sentence_indices = tf.gather(candidate_sentence_indices, top_span_indices) # [k]
+    #top_span_sentence_indices = tf.gather(candidate_sentence_indices, top_span_indices) # [k]
     top_span_speaker_ids = tf.gather(speaker_ids, top_span_starts) # [k]
 
     c = tf.minimum(self.config["max_top_antecedents"], k)
@@ -329,11 +351,26 @@ class CorefModel(object):
     else:
       top_antecedents, top_antecedents_mask, top_fast_antecedent_scores, top_antecedent_offsets = self.distance_pruning(top_span_emb, top_span_mention_scores, c)
 
+    self.top_span_emb = top_span_emb
+    self.top_antecedents = top_antecedents
+    self.top_antecedent_offsets = top_antecedent_offsets
+    '''
+    top_span_emb = candidate_span_emb
+    #top_antecedents = tf.tile(tf.expand_dims(tf.range(c), 0), [k, 1])
+    top_antecedents = tf.constant([[1, 2], [0, 2], [0, 1]])
+    top_span_cluster_ids = candidate_cluster_ids
+    top_span_starts = candidate_starts
+    top_span_ends = candidate_ends
+
+
     dummy_scores = tf.zeros([k, 1]) # [k, 1]
     for i in range(self.config["coref_depth"]):
       with tf.variable_scope("coref_layer", reuse=(i > 0)):
         top_antecedent_emb = tf.gather(top_span_emb, top_antecedents) # [k, c, emb]
-        top_antecedent_scores = top_fast_antecedent_scores + self.get_slow_antecedent_scores(top_span_emb, top_antecedents, top_antecedent_emb, top_antecedent_offsets, top_span_speaker_ids, genre_emb) # [k, c]
+
+        #top_antecedent_scores = top_fast_antecedent_scores + self.get_slow_antecedent_scores(top_span_emb, top_antecedents, top_antecedent_emb, top_antecedent_offsets, top_span_speaker_ids, genre_emb) # [k, c]
+        top_antecedent_scores = self.get_slow_antecedent_scores(top_span_emb, k, c, top_antecedent_emb, None, None, None) # [k, c]
+
         top_antecedent_weights = tf.nn.softmax(tf.concat([dummy_scores, top_antecedent_scores], 1)) # [k, c + 1]
         top_antecedent_emb = tf.concat([tf.expand_dims(top_span_emb, 1), top_antecedent_emb], 1) # [k, c + 1, emb]
         attended_span_emb = tf.reduce_sum(tf.expand_dims(top_antecedent_weights, 2) * top_antecedent_emb, 1) # [k, emb]
@@ -344,16 +381,21 @@ class CorefModel(object):
     top_antecedent_scores = tf.concat([dummy_scores, top_antecedent_scores], 1, name='top_antecedent_scores') # [k, c + 1]
 
     top_antecedent_cluster_ids = tf.gather(top_span_cluster_ids, top_antecedents) # [k, c]
-    top_antecedent_cluster_ids += tf.to_int32(tf.log(tf.to_float(top_antecedents_mask))) # [k, c]
+    #top_antecedent_cluster_ids += tf.to_int32(tf.log(tf.to_float(top_antecedents_mask))) # [k, c]
     same_cluster_indicator = tf.equal(top_antecedent_cluster_ids, tf.expand_dims(top_span_cluster_ids, 1)) # [k, c]
     non_dummy_indicator = tf.expand_dims(top_span_cluster_ids > 0, 1) # [k, 1]
     pairwise_labels = tf.logical_and(same_cluster_indicator, non_dummy_indicator) # [k, c]
     dummy_labels = tf.logical_not(tf.reduce_any(pairwise_labels, 1, keepdims=True)) # [k, 1]
     top_antecedent_labels = tf.concat([dummy_labels, pairwise_labels], 1, name='top_antecedent_labels') # [k, c + 1]
     loss = self.softmax_loss(top_antecedent_scores, top_antecedent_labels) # [k]
+
+    self.top_antecedent_scores = top_antecedent_scores
+    self.top_antecedent_labels = top_antecedent_labels
+
     loss = tf.reduce_sum(loss) # []
 
-    return [candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedents, top_antecedent_scores], loss
+    #return [candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedents, top_antecedent_scores], loss
+    return [candidate_starts, candidate_ends, candidate_ends, top_span_starts, top_span_ends, top_antecedents, top_antecedent_scores], loss
 
   def get_span_emb(self, head_emb, context_outputs, span_starts, span_ends):
     span_emb_list = []
@@ -408,9 +450,9 @@ class CorefModel(object):
     combined_idx = use_identity * distances + (1 - use_identity) * logspace_idx
     return tf.clip_by_value(combined_idx, 0, 9)
 
-  def get_slow_antecedent_scores(self, top_span_emb, top_antecedents, top_antecedent_emb, top_antecedent_offsets, top_span_speaker_ids, genre_emb):
-    k = util.shape(top_span_emb, 0)
-    c = util.shape(top_antecedents, 1)
+  def get_slow_antecedent_scores(self, top_span_emb, k, c, top_antecedent_emb, top_antecedent_offsets, top_span_speaker_ids, genre_emb):
+    #k = util.shape(top_span_emb, 0)
+    #c = util.shape(top_antecedents, 1)
 
     feature_emb_list = []
 
@@ -428,14 +470,15 @@ class CorefModel(object):
       antecedent_distance_emb = tf.gather(tf.get_variable("antecedent_distance_emb", [10, self.config["feature_size"]]), antecedent_distance_buckets) # [k, c]
       feature_emb_list.append(antecedent_distance_emb)
 
-    feature_emb = tf.concat(feature_emb_list, 2) # [k, c, emb]
-    feature_emb = tf.nn.dropout(feature_emb, self.dropout) # [k, c, emb]
+    #feature_emb = tf.concat(feature_emb_list, 2) # [k, c, emb]
+    #feature_emb = tf.nn.dropout(feature_emb, self.dropout) # [k, c, emb]
 
     target_emb = tf.expand_dims(top_span_emb, 1) # [k, 1, emb]
     similarity_emb = top_antecedent_emb * target_emb # [k, c, emb]
     target_emb = tf.tile(target_emb, [1, c, 1]) # [k, c, emb]
 
-    pair_emb = tf.concat([target_emb, top_antecedent_emb, similarity_emb, feature_emb], 2) # [k, c, emb]
+    #pair_emb = tf.concat([target_emb, top_antecedent_emb, similarity_emb, feature_emb], 2) # [k, c, emb]
+    pair_emb = tf.concat([target_emb, top_antecedent_emb, similarity_emb], 2) # [k, c, emb]
 
     with tf.variable_scope("slow_antecedent_scores"):
       slow_antecedent_scores = util.ffnn(pair_emb, self.config["ffnn_depth"], self.config["ffnn_size"], 1, self.dropout) # [k, c, 1]
@@ -493,6 +536,7 @@ class CorefModel(object):
     return self.flatten_emb_by_sentence(text_outputs, text_len_mask)
 
   def get_predicted_antecedents(self, antecedents, antecedent_scores):
+    #set_trace()
     predicted_antecedents = []
     for i, index in enumerate(np.argmax(antecedent_scores, axis=1) - 1):
       if index < 0:
@@ -506,8 +550,8 @@ class CorefModel(object):
     predicted_clusters = []
     for i, predicted_index in enumerate(predicted_antecedents):
       if predicted_index < 0:
-        continue
-      assert i > predicted_index
+            continue
+      #assert i > predicted_index
       predicted_antecedent = (int(top_span_starts[predicted_index]), int(top_span_ends[predicted_index]))
       if predicted_antecedent in mention_to_predicted:
         predicted_cluster = mention_to_predicted[predicted_antecedent]
@@ -561,16 +605,14 @@ class CorefModel(object):
       coref_predictions[example["doc_key"]] = self.evaluate_coref(top_span_starts, top_span_ends, predicted_antecedents, example["clusters"], coref_evaluator)
       example['predict_cluster'] = coref_predictions[example["doc_key"]]
       predictions.append(example)
-      if example_num % 10 == 9:
-        print("Evaluated {}/{} examples.".format(example_num + 1, len(self.eval_data)))
 
     df = pd.DataFrame(predictions)
     df['predict'] = df[['predict_cluster', 'Pronoun_mention', 'A_mention', 'B_mention']].apply(predict, axis=1)
+    df.to_json('pred.csv', orient='records', lines=True)
     accuracy = accuracy_score(df['predict'], df['label'])
     summary_dict = {}
     summary_dict['accuracy'] = accuracy
-    print(accuracy)
-    return summary_dict, accuracy
+    return util.make_summary(summary_dict), accuracy
 
     '''
     summary_dict = {}
