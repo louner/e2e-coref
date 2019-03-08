@@ -127,10 +127,12 @@ class CorefModel(object):
 
   def tensorize_example(self, example, is_training):
     #print(example)
+    #set_trace()
     clusters = example["clusters"]
+    clusters_index = example["clusters_index"]
 
-
-    gold_mentions = sorted(tuple(m) for m in util.flatten(clusters))
+    #gold_mentions = sorted(tuple(m) for m in util.flatten(clusters))
+    gold_mentions = tuple(tuple(m) for _,m in sorted(zip(clusters_index, util.flatten(clusters))))
     gold_mention_map = {m:i for i,m in enumerate(gold_mentions)}
     cluster_ids = np.zeros(len(gold_mentions))
     for cluster_id, cluster in enumerate(clusters):
@@ -536,14 +538,13 @@ class CorefModel(object):
     return self.flatten_emb_by_sentence(text_outputs, text_len_mask)
 
   def get_predicted_antecedents(self, antecedents, antecedent_scores):
-    #set_trace()
-    predicted_antecedents = []
-    for i, index in enumerate(np.argmax(antecedent_scores, axis=1) - 1):
-      if index < 0:
-        predicted_antecedents.append(-1)
-      else:
-        predicted_antecedents.append(antecedents[i, index])
-    return predicted_antecedents
+    predicted = np.argmax(antecedent_scores[0])
+    if predicted == 1:
+        return 0
+    elif predicted == 2:
+        return 1
+    else:
+        return 2
 
   def get_predicted_clusters(self, top_span_starts, top_span_ends, predicted_antecedents):
     mention_to_predicted = {}
@@ -601,15 +602,21 @@ class CorefModel(object):
       _, _, _, _, _, _, _, _, _, gold_starts, gold_ends, _ = tensorized_example
       feed_dict = {i:t for i,t in zip(self.input_tensors, tensorized_example)}
       candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedents, top_antecedent_scores = session.run(self.predictions, feed_dict=feed_dict)
+      example['top_antecedent_scores'] = top_antecedent_scores
+      example['candidate_starts'] = candidate_starts
+      example['top_antecedents'] = top_antecedents
       predicted_antecedents = self.get_predicted_antecedents(top_antecedents, top_antecedent_scores)
-      coref_predictions[example["doc_key"]] = self.evaluate_coref(top_span_starts, top_span_ends, predicted_antecedents, example["clusters"], coref_evaluator)
-      example['predict_cluster'] = coref_predictions[example["doc_key"]]
+      #coref_predictions[example["doc_key"]] = self.evaluate_coref(top_span_starts, top_span_ends, predicted_antecedents, example["clusters"], coref_evaluator)
+      #example['predict_cluster'] = coref_predictions[example["doc_key"]]
+      example['predict'] = predicted_antecedents
+      #example['predict_cluster'] = self.evaluate_coref(top_span_starts, top_span_ends, predicted_antecedents, example["clusters"], coref_evaluator)
       predictions.append(example)
 
     df = pd.DataFrame(predictions)
-    df['predict'] = df[['predict_cluster', 'Pronoun_mention', 'A_mention', 'B_mention']].apply(predict, axis=1)
+    #df['predict'] = df[['predict_cluster', 'Pronoun_mention', 'A_mention', 'B_mention']].apply(predict, axis=1)
     df.to_json('pred.csv', orient='records', lines=True)
     accuracy = accuracy_score(df['predict'], df['label'])
+    print(accuracy)
     summary_dict = {}
     summary_dict['accuracy'] = accuracy
     return util.make_summary(summary_dict), accuracy
