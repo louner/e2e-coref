@@ -77,7 +77,12 @@ class CorefModel(object):
 
   def start_enqueue_thread(self, session):
     with open(self.config["train_path"]) as f:
-      train_examples = [json.loads(jsonline) for jsonline in f.readlines()]
+      train_examples = []
+      for jsonline in f.readlines():
+        try:
+            train_examples.append(json.loads(jsonline.strip('\n')))
+        except:
+            set_trace()
     def _enqueue_loop():
       while True:
         random.shuffle(train_examples)
@@ -612,10 +617,17 @@ class CorefModel(object):
       #example['predict_cluster'] = self.evaluate_coref(top_span_starts, top_span_ends, predicted_antecedents, example["clusters"], coref_evaluator)
       predictions.append(example)
 
-    df = pd.DataFrame(predictions)
+    pred = pd.DataFrame(predictions)
     #df['predict'] = df[['predict_cluster', 'Pronoun_mention', 'A_mention', 'B_mention']].apply(predict, axis=1)
-    df.to_json('pred.csv', orient='records', lines=True)
-    accuracy = accuracy_score(df['predict'], df['label'])
+    submission = pd.DataFrame()
+    submission['ID'] = pred['ID']
+    submission['A'] = pred['predict'].apply(lambda x: float(x==0))
+    submission['B'] = pred['predict'].apply(lambda x: float(x==1))
+    submission['NEITHER'] = pred['predict'].apply(lambda x: float(x==2))
+    submission.to_csv('submission.csv', index=False)
+
+    pred.to_json('pred.csv', orient='records', lines=True)
+    accuracy = accuracy_score(pred['predict'], pred['label'])
     print(accuracy)
     summary_dict = {}
     summary_dict['accuracy'] = accuracy
