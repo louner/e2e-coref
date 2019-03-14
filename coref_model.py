@@ -385,7 +385,9 @@ class CorefModel(object):
           f = tf.sigmoid(util.projection(tf.concat([top_span_emb, attended_span_emb], 1), util.shape(top_span_emb, -1))) # [k, emb]
           top_span_emb = f * attended_span_emb + (1 - f) * top_span_emb # [k, emb]
 
-    top_antecedent_scores = tf.concat([dummy_scores, top_antecedent_scores], 1, name='top_antecedent_scores') # [k, c + 1]
+    
+    top_antecedent_scores = util.ffnn(top_antecedent_scores, 1, 3, 2+1, None)
+    #top_antecedent_scores = tf.concat([dummy_scores, top_antecedent_scores], 1, name='top_antecedent_scores') # [k, c + 1]
 
     top_antecedent_cluster_ids = tf.gather(top_span_cluster_ids, top_antecedents) # [k, c]
     #top_antecedent_cluster_ids += tf.to_int32(tf.log(tf.to_float(top_antecedents_mask))) # [k, c]
