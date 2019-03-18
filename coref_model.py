@@ -298,7 +298,8 @@ class CorefModel(object):
     flattened_sentence_indices = self.flatten_emb_by_sentence(sentence_indices, text_len_mask) # [num_words]
     flattened_head_emb = self.flatten_emb_by_sentence(head_emb, text_len_mask) # [num_words]
 
-    candidate_starts = tf.tile(tf.expand_dims(tf.range(num_words), 1), [1, self.max_span_width]) # [num_words, max_span_width]
+    #candidate_starts = tf.tile(tf.expand_dims(tf.range(num_words), 1), [1, self.max_span_width]) # [num_words, max_span_width]
+    candidate_starts = tf.range(num_words)
     candidate_ends = candidate_starts
     #candidate_ends = candidate_starts + tf.expand_dims(tf.range(self.max_span_width), 0) # [num_words, max_span_width]
     #candidate_starts = gold_starts
@@ -325,7 +326,8 @@ class CorefModel(object):
     #k = tf.to_int32(tf.floor(tf.to_float(tf.shape(context_outputs)[0]) * self.config["top_span_ratio"]))
     #c = tf.minimum(self.config["max_top_antecedents"], k)
     k = tf.constant(3)
-    c = tf.constant(2)
+    #c = tf.constant(2)
+    c = tf.shape(candidate_starts)[0]
     self.k = k
     self.c = c
 
@@ -373,12 +375,12 @@ class CorefModel(object):
     top_span_starts = candidate_starts
     top_span_ends = candidate_ends
 
-
     dummy_scores = tf.zeros([k, 1]) # [k, 1]
     for i in range(self.config["coref_depth"]):
       with tf.variable_scope("coref_layer", reuse=(i > 0)):
         #top_antecedent_emb = tf.gather(top_span_emb, top_antecedents) # [k, c, emb]
-        top_antecedent_emb = candidate_span_emb
+        top_antecedent_emb = tf.expand_dims(candidate_span_emb, 0)
+        top_antecedent_emb = tf.tile(top_antecedent_emb, [tf.shape(top_span_emb)[0], 1, 1])
 
         #top_antecedent_scores = top_fast_antecedent_scores + self.get_slow_antecedent_scores(top_span_emb, top_antecedents, top_antecedent_emb, top_antecedent_offsets, top_span_speaker_ids, genre_emb) # [k, c]
         top_antecedent_scores = self.get_slow_antecedent_scores(top_span_emb, k, c, top_antecedent_emb, None, None, None) # [k, c]
@@ -468,6 +470,7 @@ class CorefModel(object):
   def get_slow_antecedent_scores(self, top_span_emb, k, c, top_antecedent_emb, top_antecedent_offsets, top_span_speaker_ids, genre_emb):
     #k = util.shape(top_span_emb, 0)
     #c = util.shape(top_antecedents, 1)
+    c  = tf.shape(top_antecedent_emb)[1]
 
     feature_emb_list = []
 
@@ -489,6 +492,8 @@ class CorefModel(object):
     #feature_emb = tf.nn.dropout(feature_emb, self.dropout) # [k, c, emb]
 
     target_emb = tf.expand_dims(top_span_emb, 1) # [k, 1, emb]
+    #top_antecedent_emb = tf.expand_dims(top_antecedent_emb, 1)
+    #top_antecedent_emb = tf.tile(top_antecedent_emb, [1, c, 1])
     similarity_emb = top_antecedent_emb * target_emb # [k, c, emb]
     target_emb = tf.tile(target_emb, [1, c, 1]) # [k, c, emb]
 
