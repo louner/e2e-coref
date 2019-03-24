@@ -44,7 +44,8 @@ class CorefModel(object):
     input_props.append((tf.string, [None, None])) # Tokens.
     input_props.append((tf.float32, [None, None, self.context_embeddings.size])) # Context embeddings.
     input_props.append((tf.float32, [None, None, self.head_embeddings.size])) # Head embeddings.
-    input_props.append((tf.float32, [None, None, self.lm_size, self.lm_layers])) # LM embeddings.
+    #input_props.append((tf.float32, [None, None, self.lm_size, self.lm_layers])) # LM embeddings.
+    input_props.append((tf.float32, [None, None, self.lm_size])) # LM embeddings.
     input_props.append((tf.int32, [None, None, None])) # Character indices.
     input_props.append((tf.int32, [None])) # Text lengths.
     input_props.append((tf.int32, [None])) # Speaker IDs.
@@ -98,8 +99,8 @@ class CorefModel(object):
     # Don't try to restore unused variables from the TF-Hub ELMo module.
     vars_to_restore = [v for v in tf.global_variables() if "module/" not in v.name]
     saver = tf.train.Saver(vars_to_restore)
-    #checkpoint_path = os.path.join(self.config["log_dir"], "model.max.ckpt")
-    checkpoint_path = os.path.join(self.config["log_dir"], "model-5000")
+    checkpoint_path = os.path.join(self.config["log_dir"], "model.max.ckpt")
+    #checkpoint_path = os.path.join(self.config["log_dir"], "model.max")
     print("Restoring from {}".format(checkpoint_path))
     session.run(tf.global_variables_initializer())
     saver.restore(session, checkpoint_path)
@@ -111,9 +112,11 @@ class CorefModel(object):
     group = self.lm_file[file_key]
     num_sentences = len(list(group.keys()))
     sentences = [group[str(i)][...] for i in range(num_sentences)]
-    lm_emb = np.zeros([num_sentences, max(s.shape[0] for s in sentences), self.lm_size, self.lm_layers])
+    #lm_emb = np.zeros([num_sentences, max(s.shape[0] for s in sentences), self.lm_size, self.lm_layers])
+    lm_emb = np.zeros([num_sentences, max(s.shape[0] for s in sentences), self.lm_size])
+    #set_trace()
     for i, s in enumerate(sentences):
-      lm_emb[i, :s.shape[0], :, :] = s
+      lm_emb[i, :s.shape[0], :] = s
     return lm_emb
 
   def tensorize_mentions(self, mentions):
@@ -150,6 +153,7 @@ class CorefModel(object):
 
     assert num_words == len(speakers)
 
+    #set_trace()
     max_sentence_length = max(len(s) for s in sentences)
     max_word_length = max(max(max(len(w) for w in s) for s in sentences), max(self.config["filter_widths"]))
     text_len = np.array([len(s) for s in sentences])
@@ -271,6 +275,7 @@ class CorefModel(object):
       lm_emb = tf.stack([tf.concat([word_emb, word_emb], -1),
                          lm_embeddings["lstm_outputs1"],
                          lm_embeddings["lstm_outputs2"]], -1)  # [num_sentences, max_sentence_length, 1024, 3]
+    '''
     lm_emb_size = util.shape(lm_emb, 2)
     lm_num_layers = util.shape(lm_emb, 3)
     with tf.variable_scope("lm_aggregation"):
@@ -280,6 +285,8 @@ class CorefModel(object):
     flattened_aggregated_lm_emb = tf.matmul(flattened_lm_emb, tf.expand_dims(self.lm_weights, 1)) # [num_sentences * max_sentence_length * emb, 1]
     aggregated_lm_emb = tf.reshape(flattened_aggregated_lm_emb, [num_sentences, max_sentence_length, lm_emb_size])
     aggregated_lm_emb *= self.lm_scaling
+    '''
+    aggregated_lm_emb = lm_emb
     context_emb_list.append(aggregated_lm_emb)
 
     context_emb = tf.concat(context_emb_list, 2) # [num_sentences, max_sentence_length, emb]
@@ -386,8 +393,8 @@ class CorefModel(object):
           top_span_emb = f * attended_span_emb + (1 - f) * top_span_emb # [k, emb]
 
     
-    top_antecedent_scores = util.ffnn(top_antecedent_scores, 1, 3, 2+1, None)
-    #top_antecedent_scores = tf.concat([dummy_scores, top_antecedent_scores], 1, name='top_antecedent_scores') # [k, c + 1]
+    #top_antecedent_scores = util.ffnn(top_antecedent_scores, 1, 3, 2+1, None)
+    top_antecedent_scores = tf.concat([dummy_scores, top_antecedent_scores], 1, name='top_antecedent_scores') # [k, c + 1]
 
     top_antecedent_cluster_ids = tf.gather(top_span_cluster_ids, top_antecedents) # [k, c]
     #top_antecedent_cluster_ids += tf.to_int32(tf.log(tf.to_float(top_antecedents_mask))) # [k, c]
